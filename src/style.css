@@ -2,7 +2,7 @@
   color: #f3f5f7;
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   --bg-position: 50% 25%;
-  --bg-size: 17 5% auto;
+  --bg-size: 175% auto;
   --bg-overlay: linear-gradient(180deg, rgba(10, 14, 22, 0.18), rgba(10, 14, 22, 0.34));
 }
 
