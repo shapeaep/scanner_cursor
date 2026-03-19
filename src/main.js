@@ -9,6 +9,8 @@ import scannerIconUrl from '../images/jpg/scanner_converted.jpg';
 import clothAlphaMaskUrl from '../images/alpha_masks/cloth_alpha_mask.jpg';
 import nakedAlphaMaskUrl from '../images/alpha_masks/naked_alpha_mask.jpg';
 import scannerAlphaMaskUrl from '../images/alpha_masks/scanner_converted_alpha_mask.jpg';
+import tempScannerIconUrl from '../images/jpg/temp_scanner.jpg';
+import tempScannerAlphaMaskUrl from '../images/alpha_masks/temp_scanner_alpha_mask.jpg';
 
 const skeletonSource = typeof rawSkeletonSource === 'string'
   ? JSON.parse(rawSkeletonSource)
@@ -24,15 +26,27 @@ const textureEntries = [
 const DETECTION_BONE_NAMES = ['cloth7'];
 const DETECTION_SLOT_NAME = 'cloth';
 const DETECTION_WEIGHT_THRESHOLD = 0.18;
+const VITALS_HEAD_BONE_NAME = 'cloth23';
 const RELEASE_MASK_FADE_SPEED = 5.6;
 const ENDGAME_REVEAL_DELAY_MS = 900;
 const CTA_TITLE = 'SCAN COMPLETE';
 const CTA_SUBTITLE = 'Infection confirmed. Start treatment now.';
 const CTA_BUTTON_LABEL = 'INSTALL NOW';
 const TOUCH_SCAN_LIFT_FACTOR = 1.35;
-const TOUCH_SCAN_LIFT_MIN = 88;
+const TOUCH_SCAN_LIFT_MIN = 170;
 const PEN_SCAN_LIFT_FACTOR = 0.8;
 const PEN_SCAN_LIFT_MIN = 42;
+const TOOL_XRAY = 'xray';
+const TOOL_VITALS = 'vitals';
+const BASE_BODY_TEMP = 36.6;
+const ALERT_BODY_TEMP = 39.1;
+const BASE_HEART_RATE = 74;
+const ALERT_HEART_RATE = 171;
+const GREEN = 2;
+const YELLOW = 0.84;
+const RED = 0.6;
+const HEARTBEAT_SOUND_VOLUME = 0.42;
+const HEARTBEAT_SOUND_DOUBLE_PULSE_DELAY = 0.12;
 
 const collectAttachmentNames = (skeletonData) => {
   const attachmentNames = new Set();
@@ -106,6 +120,24 @@ const mergeBounds = (...boundsList) => {
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const lerp = (start, end, amount) => start + (end - start) * amount;
+
+const formatTemperature = (value) => `${value.toFixed(1)}°C`;
+
+const removeWhiteMatte = (color, alpha) => {
+  if (alpha <= 0) {
+    return 0;
+  }
+
+  if (alpha >= 255) {
+    return color;
+  }
+
+  const normalizedAlpha = alpha / 255;
+  const demultiplied = (color - 255 * (1 - normalizedAlpha)) / normalizedAlpha;
+
+  return clamp(Math.round(demultiplied), 0, 255);
+};
 
 const loadImageElement = (src) => new Promise((resolve, reject) => {
   const image = new Image();
@@ -154,9 +186,15 @@ const composeAlphaMaskedCanvas = async (assetUrl, alphaMaskUrl) => {
   const alphaPixels = alphaImageData.data;
 
   for (let pixelIndex = 0; pixelIndex < colorPixels.length; pixelIndex += 4) {
-    colorPixels[pixelIndex + 3] = Math.round(
+    const alpha = Math.round(
       (alphaPixels[pixelIndex] + alphaPixels[pixelIndex + 1] + alphaPixels[pixelIndex + 2]) / 3,
     );
+    colorPixels[pixelIndex + 3] = alpha;
+
+    // Compensate for light JPG matte on semi-transparent edges to avoid white fringing.
+    colorPixels[pixelIndex] = removeWhiteMatte(colorPixels[pixelIndex], alpha);
+    colorPixels[pixelIndex + 1] = removeWhiteMatte(colorPixels[pixelIndex + 1], alpha);
+    colorPixels[pixelIndex + 2] = removeWhiteMatte(colorPixels[pixelIndex + 2], alpha);
   }
 
   colorContext.putImageData(colorImageData, 0, 0);
@@ -184,20 +222,57 @@ const loadUiAssetUrl = async (assetUrl, alphaMaskUrl) => {
   return maskedCanvas.toDataURL('image/png');
 };
 
-const createScannerButton = (iconUrl) => {
+const createScannerButton = (iconUrl, {
+  tool,
+  label,
+  hint,
+  ariaLabel,
+  themeClass = '',
+} = {}) => {
   const scannerButton = document.createElement('button');
 
-  scannerButton.className = 'scanner-button';
+  scannerButton.className = `scanner-button ${themeClass}`.trim();
   scannerButton.type = 'button';
-  scannerButton.setAttribute('aria-label', 'Hold scanner to scan');
+  scannerButton.dataset.tool = tool;
+  scannerButton.setAttribute('aria-label', ariaLabel || 'Hold scanner to scan');
   scannerButton.innerHTML = `
     <span class="scanner-button__shine"></span>
     <img class="scanner-button__img" src="${iconUrl}" alt="" draggable="false" />
-    <span class="scanner-button__label">Scanner</span>
-    <span class="scanner-button__hint">Hold and drag</span>
+    <span class="scanner-button__label">${label || 'Scanner'}</span>
+    <span class="scanner-button__hint">${hint || 'Hold and drag'}</span>
   `;
 
   return scannerButton;
+};
+
+const createToolDock = (...buttons) => {
+  const toolDock = document.createElement('div');
+
+  toolDock.className = 'tool-dock';
+  toolDock.append(...buttons);
+
+  return toolDock;
+};
+
+const createIntroOverlay = () => {
+  const introOverlay = document.createElement('div');
+
+  introOverlay.className = 'intro-overlay';
+  introOverlay.innerHTML = `
+    <div class="intro-overlay__backdrop"></div>
+    <button class="intro-overlay__button" type="button">Start Inspection</button>
+  `;
+
+  const startButton = introOverlay.querySelector('.intro-overlay__button');
+
+  if (!(startButton instanceof HTMLButtonElement)) {
+    throw new Error('Failed to create intro overlay button.');
+  }
+
+  return {
+    introOverlay,
+    startButton,
+  };
 };
 
 const createScanAlert = () => {
@@ -207,6 +282,32 @@ const createScanAlert = () => {
   scanAlert.textContent = 'INFECTED';
 
   return scanAlert;
+};
+
+const createVitalsReadout = () => {
+  const vitalsReadout = document.createElement('div');
+
+  vitalsReadout.className = 'vitals-readout';
+  vitalsReadout.innerHTML = `
+    <div class="vitals-readout__row">
+      <span class="vitals-readout__metric" data-role="temp">TEMP ${formatTemperature(BASE_BODY_TEMP)}</span>
+      <span class="vitals-readout__metric" data-role="bpm">BPM ${BASE_HEART_RATE}</span>
+    </div>
+    <div class="vitals-readout__wave"></div>
+  `;
+
+  const tempValue = vitalsReadout.querySelector('[data-role="temp"]');
+  const bpmValue = vitalsReadout.querySelector('[data-role="bpm"]');
+
+  if (!(tempValue instanceof HTMLElement) || !(bpmValue instanceof HTMLElement)) {
+    throw new Error('Failed to create vitals readout.');
+  }
+
+  return {
+    vitalsReadout,
+    tempValue,
+    bpmValue,
+  };
 };
 
 const createEndgameOverlay = () => {
@@ -266,8 +367,27 @@ export const createScannerPlayable = async ({
     width: initialWidth,
     height: initialHeight,
   });
-  const scannerButtonIconUrl = await loadUiAssetUrl(scannerIconUrl, scannerAlphaMaskUrl);
-  const scannerButton = createScannerButton(scannerButtonIconUrl);
+  const [scannerButtonIconUrl, tempScannerButtonIconUrl] = await Promise.all([
+    loadUiAssetUrl(scannerIconUrl, scannerAlphaMaskUrl),
+    loadUiAssetUrl(tempScannerIconUrl, tempScannerAlphaMaskUrl),
+  ]);
+  const xrayButton = createScannerButton(scannerButtonIconUrl, {
+    tool: TOOL_XRAY,
+    label: 'X-Ray',
+    hint: 'Reveal infection',
+    ariaLabel: 'Hold x-ray scanner to scan',
+    themeClass: 'scanner-button--xray',
+  });
+  const vitalsButton = createScannerButton(tempScannerButtonIconUrl, {
+    tool: TOOL_VITALS,
+    label: 'Vitals',
+    hint: 'Temp + BPM',
+    ariaLabel: 'Hold thermal scanner to read vitals',
+    themeClass: 'scanner-button--vitals',
+  });
+  const toolDock = createToolDock(xrayButton, vitalsButton);
+  const { introOverlay, startButton } = createIntroOverlay();
+  const { vitalsReadout, tempValue, bpmValue } = createVitalsReadout();
   const scanAlert = createScanAlert();
   const { endgameOverlay, ctaButton } = createEndgameOverlay();
   const cleanupTasks = [];
@@ -278,7 +398,7 @@ export const createScannerPlayable = async ({
   };
 
   appElement.innerHTML = '';
-  appElement.append(app.view, scannerButton, scanAlert, endgameOverlay);
+  appElement.append(app.view, toolDock, vitalsReadout, scanAlert, endgameOverlay, introOverlay);
 
   const attachmentNames = collectAttachmentNames(skeletonSource);
   const textureSets = await loadTextureSets(attachmentNames);
@@ -312,6 +432,7 @@ export const createScannerPlayable = async ({
 
   const infectedSlot = clothedSpine.skeleton.findSlot(DETECTION_SLOT_NAME);
   const infectedAttachment = infectedSlot?.getAttachment();
+  const vitalsHeadBone = clothedSpine.skeleton.findBone(VITALS_HEAD_BONE_NAME);
   const infectedBoneIndices = new Set(
     DETECTION_BONE_NAMES
       .map((boneName) => clothedSpine.skeleton.findBone(boneName)?.data?.index)
@@ -319,8 +440,10 @@ export const createScannerPlayable = async ({
   );
 
   const characterContainer = new Container();
+  const nakedLayer = new Container();
   const clothedLayer = new Container();
   const clothingMask = new Graphics();
+  const revealMask = new Graphics();
   const scanFx = new Graphics();
   const spotlightRing = new Graphics();
   const pointer = {
@@ -333,9 +456,16 @@ export const createScannerPlayable = async ({
     x: pointer.x,
     y: pointer.y,
     strength: 0,
+    tool: TOOL_XRAY,
+  };
+  const toolButtons = {
+    [TOOL_XRAY]: xrayButton,
+    [TOOL_VITALS]: vitalsButton,
   };
   let revealRadius = 64;
   let activePointerId = null;
+  let activeTool = TOOL_XRAY;
+  let scanningTool = null;
   let scanClock = 0;
   let scanHitArmed = false;
   let infectionHideTimeoutId = null;
@@ -345,6 +475,33 @@ export const createScannerPlayable = async ({
   let destroyed = false;
   let gameWon = false;
   let endgameVisible = false;
+  let inspectionStarted = false;
+  let appVolumeLevel = sdk.volume ?? 1;
+  let characterScreenBounds = {
+    x: 0,
+    y: 0,
+    width: initialWidth,
+    height: initialHeight,
+  };
+  const vitalsDisplayState = {
+    temperature: 0,
+    bpm: 0,
+    signal: 0,
+    pace: GREEN,
+    heartbeatOffset: 0,
+    heartbeatVelocity: 180 / GREEN,
+    readoutLeft: initialWidth / 2 - 95,
+    readoutTop: initialHeight / 2 + 34,
+    state: 'idle',
+  };
+  const heartbeatAudioState = {
+    context: null,
+    masterGain: null,
+    nextBeatAt: 0,
+    enabled: false,
+    bpm: BASE_HEART_RATE,
+    unlockRequested: false,
+  };
   const buildInfectedZone = (
     attachment,
     targetBoneIndexSet,
@@ -400,31 +557,64 @@ export const createScannerPlayable = async ({
   };
 
   const infectedZone = buildInfectedZone(infectedAttachment, infectedBoneIndices);
+  const infectedVertexIndexSet = new Set(infectedZone.vertexIndices);
   const infectedWorldVertices = infectedAttachment
     ? new Float32Array(infectedAttachment.worldVerticesLength)
     : null;
 
+  nakedLayer.addChild(nakedSpine);
+  nakedLayer.mask = revealMask;
   clothedLayer.addChild(clothedSpine);
   clothedLayer.mask = clothingMask;
 
-  characterContainer.addChild(nakedSpine);
+  characterContainer.addChild(nakedLayer);
   characterContainer.addChild(clothedLayer);
 
   app.stage.addChild(characterContainer);
+  app.stage.addChild(revealMask);
   app.stage.addChild(clothingMask);
   app.stage.addChild(scanFx);
   app.stage.addChild(spotlightRing);
 
-  const setScanningState = (isActive) => {
+  const updateToolState = () => {
+    for (const [toolName, button] of Object.entries(toolButtons)) {
+      button.classList.toggle('is-selected', toolName === activeTool);
+      button.classList.toggle('is-active', pointer.active && scanningTool === toolName);
+    }
+
+    toolDock.classList.toggle('is-hidden', gameWon || !inspectionStarted);
+    appElement.dataset.tool = activeTool;
+  };
+
+  const setInspectionStarted = (started) => {
+    inspectionStarted = started;
+    introOverlay.classList.toggle('is-hidden', started);
+    appElement.classList.toggle('is-ready', started);
+    updateToolState();
+  };
+
+  const setScanningState = (isActive, toolName = activeTool) => {
     pointer.active = isActive;
-    scannerButton.classList.toggle('is-active', isActive);
+
+    if (isActive) {
+      activeTool = toolName;
+      scanningTool = toolName;
+    } else {
+      scanningTool = null;
+    }
+
+    updateToolState();
     appElement.classList.toggle('is-scanning', isActive);
   };
 
   const setFinishedState = (isFinished) => {
     gameWon = isFinished;
-    scannerButton.disabled = isFinished;
-    scannerButton.classList.toggle('is-hidden', isFinished);
+    toolDock.classList.toggle('is-hidden', isFinished || !inspectionStarted);
+
+    for (const button of Object.values(toolButtons)) {
+      button.disabled = isFinished;
+    }
+
     appElement.classList.toggle('is-finished', isFinished);
   };
 
@@ -432,6 +622,264 @@ export const createScannerPlayable = async ({
     endgameVisible = isVisible;
     endgameOverlay.classList.toggle('is-visible', isVisible);
     appElement.classList.toggle('has-endgame', isVisible);
+  };
+
+  const setVitalsVisible = (isVisible) => {
+    vitalsReadout.classList.toggle('is-visible', isVisible);
+  };
+
+  const ensureHeartbeatAudio = async () => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContextClass) {
+      return null;
+    }
+
+    if (!heartbeatAudioState.context) {
+      const context = new AudioContextClass();
+      const masterGain = context.createGain();
+
+      masterGain.gain.value = 0;
+      masterGain.connect(context.destination);
+
+      heartbeatAudioState.context = context;
+      heartbeatAudioState.masterGain = masterGain;
+    }
+
+    if (heartbeatAudioState.context.state === 'suspended') {
+      try {
+        await heartbeatAudioState.context.resume();
+      } catch {
+        return heartbeatAudioState.context;
+      }
+    }
+
+    return heartbeatAudioState.context;
+  };
+
+  const unlockHeartbeatAudio = () => {
+    if (heartbeatAudioState.unlockRequested) {
+      return;
+    }
+
+    heartbeatAudioState.unlockRequested = true;
+    void ensureHeartbeatAudio().then(() => {
+      heartbeatAudioState.unlockRequested = false;
+      updateHeartbeatAudioGain();
+    });
+  };
+
+  const updateHeartbeatAudioGain = () => {
+    if (!heartbeatAudioState.context || !heartbeatAudioState.masterGain) {
+      return;
+    }
+
+    const now = heartbeatAudioState.context.currentTime;
+    const gainTarget = heartbeatAudioState.enabled
+      ? HEARTBEAT_SOUND_VOLUME * clamp(appVolumeLevel, 0, 1)
+      : 0;
+
+    heartbeatAudioState.masterGain.gain.cancelScheduledValues(now);
+    heartbeatAudioState.masterGain.gain.linearRampToValueAtTime(gainTarget, now + 0.06);
+  };
+
+  const setHeartbeatAudioEnabled = (enabled, bpm = BASE_HEART_RATE) => {
+    const nextEnabled = enabled;
+    const nextBpm = Number.isFinite(bpm) ? Math.max(0, bpm) : BASE_HEART_RATE;
+    const enabledChanged = heartbeatAudioState.enabled !== nextEnabled;
+    const bpmChanged = Math.abs(heartbeatAudioState.bpm - nextBpm) >= 1;
+
+    heartbeatAudioState.enabled = nextEnabled;
+    heartbeatAudioState.bpm = nextBpm;
+
+    if (!nextEnabled) {
+      heartbeatAudioState.nextBeatAt = 0;
+    } else {
+      unlockHeartbeatAudio();
+    }
+
+    if (enabledChanged || bpmChanged) {
+      updateHeartbeatAudioGain();
+    }
+  };
+
+  const triggerHeartbeatPulse = (startTime, frequency, duration, peakGain) => {
+    if (!heartbeatAudioState.context || !heartbeatAudioState.masterGain || appVolumeLevel <= 0) {
+      return;
+    }
+
+    const oscillator = heartbeatAudioState.context.createOscillator();
+    const gainNode = heartbeatAudioState.context.createGain();
+    const filter = heartbeatAudioState.context.createBiquadFilter();
+
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(frequency, startTime);
+    oscillator.frequency.exponentialRampToValueAtTime(Math.max(28, frequency * 0.68), startTime + duration);
+
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(320, startTime);
+    filter.Q.value = 1.1;
+
+    gainNode.gain.setValueAtTime(0.0001, startTime);
+    gainNode.gain.exponentialRampToValueAtTime(Math.max(0.0002, peakGain), startTime + 0.012);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+    oscillator.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(heartbeatAudioState.masterGain);
+
+    oscillator.start(startTime);
+    oscillator.stop(startTime + duration + 0.02);
+  };
+
+  const updateHeartbeatAudio = () => {
+    if (
+      !heartbeatAudioState.enabled
+      || !heartbeatAudioState.context
+      || !heartbeatAudioState.masterGain
+      || heartbeatAudioState.context.state !== 'running'
+      || appVolumeLevel <= 0
+    ) {
+      return;
+    }
+
+    const bpm = Math.max(24, heartbeatAudioState.bpm || BASE_HEART_RATE);
+    const beatInterval = 60 / bpm;
+    const now = heartbeatAudioState.context.currentTime;
+
+    if (heartbeatAudioState.nextBeatAt <= now) {
+      heartbeatAudioState.nextBeatAt = now + 0.01;
+    }
+
+    while (heartbeatAudioState.nextBeatAt < now + 0.18) {
+      const firstBeatAt = heartbeatAudioState.nextBeatAt;
+      const secondBeatAt = firstBeatAt + HEARTBEAT_SOUND_DOUBLE_PULSE_DELAY;
+      const intensity = clamp((bpm - BASE_HEART_RATE) / Math.max(ALERT_HEART_RATE - BASE_HEART_RATE, 1), 0, 1);
+
+      triggerHeartbeatPulse(firstBeatAt, 82 + intensity * 10, 0.11, 1.15 + intensity * 0.22);
+      triggerHeartbeatPulse(secondBeatAt, 62 + intensity * 8, 0.085, 0.68 + intensity * 0.16);
+      heartbeatAudioState.nextBeatAt += beatInterval;
+    }
+  };
+
+  const smoothVitalsReading = ({
+    temperature = 0,
+    bpm = 0,
+    signal = 0,
+    pace = GREEN,
+    state = 'idle',
+  } = {}) => {
+    const safeTemperature = Number.isFinite(temperature) ? temperature : 0;
+    const safeBpm = Number.isFinite(bpm) ? bpm : 0;
+    const safeSignal = Number.isFinite(signal) ? clamp(signal, 0, 1) : 0;
+    const safePace = Number.isFinite(pace) ? Math.max(pace, 0.05) : GREEN;
+    const isIdle = state === 'idle' || (safeTemperature <= 0 && safeBpm <= 0);
+    const blend = isIdle ? 0.24 : 0.15;
+
+    vitalsDisplayState.temperature = lerp(vitalsDisplayState.temperature, safeTemperature, blend);
+    vitalsDisplayState.bpm = lerp(vitalsDisplayState.bpm, safeBpm, blend);
+    vitalsDisplayState.signal = lerp(vitalsDisplayState.signal, safeSignal, blend * 0.92);
+    vitalsDisplayState.pace = lerp(vitalsDisplayState.pace, safePace, blend * 0.65);
+
+    if (vitalsDisplayState.temperature < 0.04) {
+      vitalsDisplayState.temperature = 0;
+    }
+
+    if (vitalsDisplayState.bpm < 0.4) {
+      vitalsDisplayState.bpm = 0;
+    }
+
+    if (vitalsDisplayState.signal < 0.015) {
+      vitalsDisplayState.signal = 0;
+    }
+
+    if (vitalsDisplayState.temperature === 0 && vitalsDisplayState.bpm === 0) {
+      vitalsDisplayState.state = 'idle';
+    } else if (vitalsDisplayState.signal > 0.62) {
+      vitalsDisplayState.state = 'alert';
+    } else if (vitalsDisplayState.signal > 0.26) {
+      vitalsDisplayState.state = 'elevated';
+    } else {
+      vitalsDisplayState.state = 'stable';
+    }
+
+    return {
+      temperature: vitalsDisplayState.temperature,
+      bpm: vitalsDisplayState.bpm,
+      signal: vitalsDisplayState.signal,
+      pace: vitalsDisplayState.pace,
+      state: vitalsDisplayState.state,
+    };
+  };
+
+  const updateVitalsReadout = ({
+    temperature = BASE_BODY_TEMP,
+    bpm = BASE_HEART_RATE,
+    state = 'idle',
+    signal = 0,
+    pace = GREEN,
+  } = {}) => {
+    const safeTemperature = Number.isFinite(temperature) ? temperature : 0;
+    const safeBpm = Number.isFinite(bpm) ? Math.max(0, Math.round(bpm)) : 0;
+    const safeSignal = Number.isFinite(signal) ? clamp(signal, 0, 1) : 0;
+    const safeState = ['idle', 'stable', 'elevated', 'alert'].includes(state) ? state : 'idle';
+
+    tempValue.textContent = `TEMP ${formatTemperature(safeTemperature)}`;
+    bpmValue.textContent = `BPM ${safeBpm}`;
+    vitalsReadout.dataset.state = safeState;
+    vitalsReadout.style.setProperty('--signal-strength', safeSignal.toFixed(3));
+    vitalsReadout.style.setProperty('--pulse-scale', '1');
+    vitalsReadout.style.setProperty('--heartbeat-offset', `${vitalsDisplayState.heartbeatOffset.toFixed(2)}px`);
+  };
+
+  const updateHeartbeatWave = (deltaSeconds) => {
+    const safeDeltaSeconds = Number.isFinite(deltaSeconds) ? Math.max(deltaSeconds, 0) : 0;
+    const currentPace = Number.isFinite(vitalsDisplayState.pace)
+      ? Math.max(vitalsDisplayState.pace, 0.05)
+      : GREEN;
+    const targetVelocity = 180 / currentPace;
+    const blend = clamp(safeDeltaSeconds * 4.8, 0, 1);
+
+    vitalsDisplayState.heartbeatVelocity = lerp(
+      vitalsDisplayState.heartbeatVelocity,
+      targetVelocity,
+      blend,
+    );
+    vitalsDisplayState.heartbeatOffset -= vitalsDisplayState.heartbeatVelocity * safeDeltaSeconds;
+
+    if (vitalsDisplayState.heartbeatOffset <= -180) {
+      vitalsDisplayState.heartbeatOffset %= 180;
+    }
+
+    vitalsReadout.style.setProperty('--heartbeat-offset', `${vitalsDisplayState.heartbeatOffset.toFixed(2)}px`);
+  };
+
+  const positionVitalsReadout = (x, y, radius, alpha = 1) => {
+    const readoutWidth = 190;
+    const readoutHeight = 56;
+    const targetLeft = clamp(
+      x - readoutWidth / 2,
+      10,
+      app.screen.width - readoutWidth - 10,
+    );
+    const targetTop = clamp(
+      y + Math.max(34, radius * 0.96),
+      10,
+      app.screen.height - readoutHeight - 10,
+    );
+    const blend = pointer.active ? 0.18 : 0.12;
+
+    vitalsDisplayState.readoutLeft = lerp(vitalsDisplayState.readoutLeft, targetLeft, blend);
+    vitalsDisplayState.readoutTop = lerp(vitalsDisplayState.readoutTop, targetTop, blend);
+
+    vitalsReadout.style.left = `${vitalsDisplayState.readoutLeft}px`;
+    vitalsReadout.style.top = `${vitalsDisplayState.readoutTop}px`;
+    vitalsReadout.style.setProperty('--readout-alpha', alpha.toFixed(3));
+
+    return {
+      left: vitalsDisplayState.readoutLeft,
+      top: vitalsDisplayState.readoutTop,
+    };
   };
 
   const getScanLiftOffset = (pointerType) => {
@@ -546,14 +994,14 @@ export const createScannerPlayable = async ({
   const transformToScreenX = (matrix, x, y) => matrix.a * x + matrix.c * y + matrix.tx;
   const transformToScreenY = (matrix, x, y) => matrix.b * x + matrix.d * y + matrix.ty;
 
-  const hasInfectedHit = () => {
+  const getInfectedScreenData = () => {
     if (
       !infectedSlot
       || !infectedAttachment
       || infectedZone.vertexIndices.length === 0
       || !infectedWorldVertices
     ) {
-      return false;
+      return null;
     }
 
     infectedAttachment.computeWorldVertices(
@@ -566,12 +1014,13 @@ export const createScannerPlayable = async ({
     );
 
     const matrix = characterContainer.worldTransform;
-    const hitRadius = revealRadius + 10;
-    const hitRadiusSquared = hitRadius * hitRadius;
-
     const screenVertexMap = new Map();
+    const screenVertices = new Float32Array(infectedWorldVertices.length);
+    let sumX = 0;
+    let sumY = 0;
+    const headPoints = [];
 
-    for (const vertexIndex of infectedZone.vertexIndices) {
+    for (let vertexIndex = 0; vertexIndex < infectedAttachment.worldVerticesLength / 2; vertexIndex += 1) {
       const x = transformToScreenX(
         matrix,
         infectedWorldVertices[vertexIndex * 2],
@@ -583,8 +1032,141 @@ export const createScannerPlayable = async ({
         infectedWorldVertices[vertexIndex * 2 + 1],
       );
 
-      screenVertexMap.set(vertexIndex, { x, y });
+      screenVertices[vertexIndex * 2] = x;
+      screenVertices[vertexIndex * 2 + 1] = y;
 
+      if (infectedVertexIndexSet.has(vertexIndex)) {
+        screenVertexMap.set(vertexIndex, { x, y });
+        sumX += x;
+        sumY += y;
+      }
+
+    }
+
+    if (vitalsHeadBone) {
+      const headLength = vitalsHeadBone.data.length || 0;
+      const headMatrix = vitalsHeadBone.matrix;
+      const sampleSteps = [0.15, 0.3, 0.45, 0.6, 0.78, 0.95];
+
+      for (const step of sampleSteps) {
+        const sampleX = vitalsHeadBone.worldX + headMatrix.a * headLength * step;
+        const sampleY = vitalsHeadBone.worldY + headMatrix.b * headLength * step;
+
+        if (Number.isFinite(sampleX) && Number.isFinite(sampleY)) {
+          headPoints.push({
+            x: transformToScreenX(matrix, sampleX, sampleY),
+            y: transformToScreenY(matrix, sampleX, sampleY),
+          });
+        }
+      }
+    }
+
+    const headCenter = headPoints.length > 0
+      ? {
+        x: headPoints.reduce((sum, point) => sum + point.x, 0) / headPoints.length,
+        y: headPoints.reduce((sum, point) => sum + point.y, 0) / headPoints.length,
+      }
+      : null;
+
+    return {
+      screenVertices,
+      screenVertexMap,
+      headCenter,
+      headPoints,
+      center: infectedZone.vertexIndices.length > 0
+        ? {
+          x: sumX / infectedZone.vertexIndices.length,
+          y: sumY / infectedZone.vertexIndices.length,
+        }
+        : null,
+    };
+  };
+
+  const getVitalsHeadScreenData = () => {
+    if (!vitalsHeadBone) {
+      return null;
+    }
+
+    const matrix = characterContainer.worldTransform;
+    const boneLength = Math.max(vitalsHeadBone.data.length || 0, 42);
+    const boneMatrix = vitalsHeadBone.matrix;
+    const rootX = vitalsHeadBone.worldX;
+    const rootY = vitalsHeadBone.worldY;
+    const tipX = rootX + boneMatrix.a * boneLength;
+    const tipY = rootY + boneMatrix.b * boneLength;
+
+    if (
+      !Number.isFinite(rootX)
+      || !Number.isFinite(rootY)
+      || !Number.isFinite(tipX)
+      || !Number.isFinite(tipY)
+    ) {
+      return null;
+    }
+
+    const root = {
+      x: transformToScreenX(matrix, rootX, rootY),
+      y: transformToScreenY(matrix, rootX, rootY),
+    };
+    const tip = {
+      x: transformToScreenX(matrix, tipX, tipY),
+      y: transformToScreenY(matrix, tipX, tipY),
+    };
+    const directionX = tip.x - root.x;
+    const directionY = tip.y - root.y;
+
+    if (!Number.isFinite(directionX) || !Number.isFinite(directionY)) {
+      return null;
+    }
+
+    const directionLength = Math.hypot(directionX, directionY) || 1;
+    const normalX = -directionY / directionLength;
+    const normalY = directionX / directionLength;
+    const center = {
+      x: root.x + directionX * 0.56,
+      y: root.y + directionY * 0.56,
+    };
+    const samples = [];
+    const steps = [0.14, 0.3, 0.46, 0.62, 0.78, 0.94];
+
+    for (const step of steps) {
+      const alongX = root.x + directionX * step;
+      const alongY = root.y + directionY * step;
+      const sideSpread = Math.max(10, directionLength * (0.2 - step * 0.05));
+
+      if (Number.isFinite(alongX) && Number.isFinite(alongY)) {
+        samples.push({ x: alongX, y: alongY });
+        samples.push({
+          x: alongX + normalX * sideSpread,
+          y: alongY + normalY * sideSpread,
+        });
+        samples.push({
+          x: alongX - normalX * sideSpread,
+          y: alongY - normalY * sideSpread,
+        });
+      }
+    }
+
+    return {
+      root,
+      tip,
+      center,
+      samples,
+      length: directionLength,
+    };
+  };
+
+  const hasInfectedHit = () => {
+    const infectedScreenData = getInfectedScreenData();
+
+    if (!infectedScreenData) {
+      return false;
+    }
+    const hitRadius = revealRadius + 10;
+    const hitRadiusSquared = hitRadius * hitRadius;
+    const { screenVertexMap } = infectedScreenData;
+
+    for (const { x, y } of screenVertexMap.values()) {
       const dx = x - pointer.x;
       const dy = y - pointer.y;
 
@@ -612,37 +1194,114 @@ export const createScannerPlayable = async ({
     });
   };
 
-  const drawSpotlight = (time = 0) => {
-    clothingMask.clear();
-    scanFx.clear();
-    spotlightRing.clear();
+  const getDistanceToRect = (x, y, bounds) => {
+    const dx = Math.max(bounds.x - x, 0, x - (bounds.x + bounds.width));
+    const dy = Math.max(bounds.y - y, 0, y - (bounds.y + bounds.height));
 
-    const revealStrength = pointer.active ? 1 : releaseMask.strength;
-    const hasVisibleReveal = revealStrength > 0.001;
-    const revealX = pointer.active ? pointer.x : releaseMask.x;
-    const revealY = pointer.active ? pointer.y : releaseMask.y;
-    const revealEase = pointer.active
-      ? 1
-      : revealStrength * (2 - revealStrength);
-    const displayRadius = revealRadius * revealEase;
+    return Math.hypot(dx, dy);
+  };
 
-    clothingMask.beginFill(0xffffff, 1);
-    clothingMask.drawRect(0, 0, app.screen.width, app.screen.height);
+  const hasVitalsBodyContact = (scanX, scanY) => {
+    const paddedBounds = {
+      x: characterScreenBounds.x - revealRadius * 0.12,
+      y: characterScreenBounds.y - revealRadius * 0.12,
+      width: characterScreenBounds.width + revealRadius * 0.24,
+      height: characterScreenBounds.height + revealRadius * 0.24,
+    };
 
-    if (hasVisibleReveal) {
-      clothingMask.beginHole();
-      clothingMask.drawCircle(revealX, revealY, displayRadius);
-      clothingMask.endHole();
+    return getDistanceToRect(scanX, scanY, paddedBounds) <= Math.max(12, revealRadius * 0.18);
+  };
+
+  const getVitalsReading = (scanX, scanY, time) => {
+    if (!hasVitalsBodyContact(scanX, scanY)) {
+      return {
+        temperature: 0,
+        bpm: 0,
+        state: 'idle',
+        signal: 0,
+        pace: GREEN,
+      };
     }
 
-    clothingMask.endFill();
+    const headScreenData = getVitalsHeadScreenData();
+    const segmentDistance = headScreenData
+      ? Math.sqrt(
+        distanceToSegmentSquared(
+          scanX,
+          scanY,
+          headScreenData.root.x,
+          headScreenData.root.y,
+          headScreenData.tip.x,
+          headScreenData.tip.y,
+        ),
+      )
+      : Infinity;
+    const sampleDistance = headScreenData?.samples.length
+      ? Math.min(...headScreenData.samples.map(({ x, y }) => Math.hypot(scanX - x, scanY - y)))
+      : Infinity;
+    const centerDistance = headScreenData?.center
+      ? Math.hypot(scanX - headScreenData.center.x, scanY - headScreenData.center.y)
+      : Infinity;
+    const headDistance = Math.min(segmentDistance, sampleDistance, centerDistance);
+    const headReach = headScreenData
+      ? Math.max(revealRadius * 1.95, headScreenData.length * 0.72)
+      : Math.max(revealRadius * 1.95, 1);
+    const headSignal = Number.isFinite(headDistance) && Number.isFinite(headReach) && headReach > 0
+      ? clamp(1 - headDistance / headReach, 0, 1)
+      : 0;
+    const pulseWave = 0.5 + 0.5 * Math.sin(time * (5.8 + headSignal * 3.4));
+    const shimmer = Math.sin(time * 14.2) * 0.035;
+    const temperature = BASE_BODY_TEMP
+      + (ALERT_BODY_TEMP - BASE_BODY_TEMP) * headSignal
+      + (pulseWave - 0.5) * 0.12
+      + shimmer;
+    const bpm = Math.round(
+      BASE_HEART_RATE
+      + (ALERT_HEART_RATE - BASE_HEART_RATE) * headSignal
+      + Math.max(0, pulseWave - 0.45) * 5,
+    );
 
-    if (!hasVisibleReveal) {
-      return;
+    if (!Number.isFinite(temperature) || !Number.isFinite(bpm)) {
+      return {
+        temperature: BASE_BODY_TEMP,
+        bpm: BASE_HEART_RATE,
+        state: 'stable',
+        signal: 0.12,
+        pace: GREEN,
+      };
     }
 
+    if (headSignal > 0.62) {
+      return {
+        temperature,
+        bpm,
+        state: 'alert',
+        signal: headSignal,
+        pace: RED,
+      };
+    }
+
+    if (headSignal > 0.26) {
+      return {
+        temperature,
+        bpm,
+        state: 'elevated',
+        signal: headSignal,
+        pace: YELLOW,
+      };
+    }
+
+    return {
+      temperature,
+      bpm,
+      state: 'stable',
+      signal: 0.14 + headSignal * 0.12,
+      pace: GREEN,
+    };
+  };
+
+  const drawXrayOverlay = (revealX, revealY, displayRadius, fxAlpha, time) => {
     const pulse = 0.5 + 0.5 * Math.sin(time * 3.6);
-    const fxAlpha = pointer.active ? 1 : revealStrength;
     const innerPulse = displayRadius * (0.22 + pulse * 0.025);
     const sweepOffset = ((time * 120) % (displayRadius * 2 + 30)) - displayRadius - 15;
 
@@ -697,6 +1356,140 @@ export const createScannerPlayable = async ({
     );
   };
 
+  const drawVitalsOverlay = (revealX, revealY, displayRadius, fxAlpha, time, reading) => {
+    const beatSpeed = (reading.bpm / 60) * Math.PI * 2;
+    const beatPulse = 0.5 + 0.5 * Math.sin(time * beatSpeed);
+    const heatIntensity = clamp((reading.temperature - BASE_BODY_TEMP) / (ALERT_BODY_TEMP - BASE_BODY_TEMP), 0, 1);
+    const arm = Math.max(16, displayRadius * 0.42);
+    const gap = Math.max(6, displayRadius * 0.14);
+    const cornerOffset = Math.max(8, displayRadius * 0.2);
+    const cornerReach = arm + cornerOffset;
+    const sweepY = (((time * 170) % (arm * 2.1)) - arm * 1.05) * 0.6;
+    const accentColor = reading.state === 'alert'
+      ? 0xff5a5a
+      : reading.state === 'elevated'
+        ? 0xffc84d
+        : 0x68ff8f;
+    const mainColor = reading.state === 'alert'
+      ? 0xff2323
+      : reading.state === 'elevated'
+        ? 0xff9a1f
+        : 0x11d46b;
+
+    scanFx.lineStyle(4.2, 0x07110a, 0.28 * fxAlpha);
+    scanFx.moveTo(revealX - arm, revealY);
+    scanFx.lineTo(revealX - gap, revealY);
+    scanFx.moveTo(revealX + gap, revealY);
+    scanFx.lineTo(revealX + arm, revealY);
+    scanFx.moveTo(revealX, revealY - arm);
+    scanFx.lineTo(revealX, revealY - gap);
+    scanFx.moveTo(revealX, revealY + gap);
+    scanFx.lineTo(revealX, revealY + arm);
+
+    scanFx.lineStyle(2.1, accentColor, (0.82 + beatPulse * 0.16) * fxAlpha);
+    scanFx.moveTo(revealX - arm, revealY);
+    scanFx.lineTo(revealX - gap, revealY);
+    scanFx.moveTo(revealX + gap, revealY);
+    scanFx.lineTo(revealX + arm, revealY);
+    scanFx.moveTo(revealX, revealY - arm);
+    scanFx.lineTo(revealX, revealY - gap);
+    scanFx.moveTo(revealX, revealY + gap);
+    scanFx.lineTo(revealX, revealY + arm);
+
+    spotlightRing.lineStyle(3.2, 0x07110a, 0.22 * fxAlpha);
+    spotlightRing.moveTo(revealX - cornerReach, revealY - cornerReach + cornerOffset);
+    spotlightRing.lineTo(revealX - cornerReach, revealY - cornerReach);
+    spotlightRing.lineTo(revealX - cornerReach + cornerOffset, revealY - cornerReach);
+    spotlightRing.moveTo(revealX + cornerReach - cornerOffset, revealY - cornerReach);
+    spotlightRing.lineTo(revealX + cornerReach, revealY - cornerReach);
+    spotlightRing.lineTo(revealX + cornerReach, revealY - cornerReach + cornerOffset);
+    spotlightRing.moveTo(revealX - cornerReach, revealY + cornerReach - cornerOffset);
+    spotlightRing.lineTo(revealX - cornerReach, revealY + cornerReach);
+    spotlightRing.lineTo(revealX - cornerReach + cornerOffset, revealY + cornerReach);
+    spotlightRing.moveTo(revealX + cornerReach - cornerOffset, revealY + cornerReach);
+    spotlightRing.lineTo(revealX + cornerReach, revealY + cornerReach);
+    spotlightRing.lineTo(revealX + cornerReach, revealY + cornerReach - cornerOffset);
+
+    spotlightRing.lineStyle(1.8, mainColor, (0.72 + heatIntensity * 0.2) * fxAlpha);
+    spotlightRing.moveTo(revealX - cornerReach, revealY - cornerReach + cornerOffset);
+    spotlightRing.lineTo(revealX - cornerReach, revealY - cornerReach);
+    spotlightRing.lineTo(revealX - cornerReach + cornerOffset, revealY - cornerReach);
+    spotlightRing.moveTo(revealX + cornerReach - cornerOffset, revealY - cornerReach);
+    spotlightRing.lineTo(revealX + cornerReach, revealY - cornerReach);
+    spotlightRing.lineTo(revealX + cornerReach, revealY - cornerReach + cornerOffset);
+    spotlightRing.moveTo(revealX - cornerReach, revealY + cornerReach - cornerOffset);
+    spotlightRing.lineTo(revealX - cornerReach, revealY + cornerReach);
+    spotlightRing.lineTo(revealX - cornerReach + cornerOffset, revealY + cornerReach);
+    spotlightRing.moveTo(revealX + cornerReach - cornerOffset, revealY + cornerReach);
+    spotlightRing.lineTo(revealX + cornerReach, revealY + cornerReach);
+    spotlightRing.lineTo(revealX + cornerReach, revealY + cornerReach - cornerOffset);
+
+    scanFx.lineStyle(1.2, reading.state === 'alert' ? 0xffd4d4 : 0xbfffd2, (0.36 + heatIntensity * 0.34) * fxAlpha);
+    scanFx.moveTo(revealX - arm * 0.92, revealY + sweepY);
+    scanFx.lineTo(revealX + arm * 0.92, revealY + sweepY);
+
+    scanFx.lineStyle(2, accentColor, (0.66 + beatPulse * 0.18) * fxAlpha);
+    scanFx.moveTo(revealX - 2, revealY);
+    scanFx.lineTo(revealX + 2, revealY);
+    scanFx.moveTo(revealX, revealY - 2);
+    scanFx.lineTo(revealX, revealY + 2);
+
+    positionVitalsReadout(revealX, revealY, displayRadius, fxAlpha);
+  };
+
+  const drawSpotlight = (time = 0) => {
+    revealMask.clear();
+    clothingMask.clear();
+    scanFx.clear();
+    spotlightRing.clear();
+    setVitalsVisible(false);
+
+    const revealStrength = pointer.active ? 1 : releaseMask.strength;
+    const hasVisibleReveal = revealStrength > 0.001;
+    const revealX = pointer.active ? pointer.x : releaseMask.x;
+    const revealY = pointer.active ? pointer.y : releaseMask.y;
+    const activeRevealTool = pointer.active ? scanningTool : releaseMask.tool;
+    const revealEase = pointer.active
+      ? 1
+      : revealStrength * (2 - revealStrength);
+    const displayRadius = revealRadius * revealEase;
+
+    clothingMask.beginFill(0xffffff, 1);
+    clothingMask.drawRect(0, 0, app.screen.width, app.screen.height);
+
+    if (hasVisibleReveal && activeRevealTool === TOOL_XRAY) {
+      revealMask.beginFill(0xffffff, 1);
+      revealMask.drawCircle(revealX, revealY, displayRadius);
+      revealMask.endFill();
+
+      clothingMask.beginHole();
+      clothingMask.drawCircle(revealX, revealY, displayRadius);
+      clothingMask.endHole();
+    }
+
+    clothingMask.endFill();
+
+    if (!hasVisibleReveal) {
+      setHeartbeatAudioEnabled(false);
+      return;
+    }
+
+    const fxAlpha = pointer.active ? 1 : revealStrength;
+
+    if (activeRevealTool === TOOL_VITALS) {
+      const vitals = smoothVitalsReading(getVitalsReading(revealX, revealY, time));
+
+      setHeartbeatAudioEnabled(true, vitals.bpm);
+      updateVitalsReadout(vitals);
+      setVitalsVisible(true);
+      drawVitalsOverlay(revealX, revealY, displayRadius, fxAlpha, time, vitals);
+      return;
+    }
+
+    setHeartbeatAudioEnabled(false);
+    drawXrayOverlay(revealX, revealY, displayRadius, fxAlpha, time);
+  };
+
   const layout = () => {
     const currentBounds = mergeBounds(
       clothedSpine.getLocalBounds(),
@@ -719,7 +1512,12 @@ export const createScannerPlayable = async ({
       app.screen.width / 2,
       app.screen.height / 2,
     );
-
+    characterScreenBounds = {
+      x: characterContainer.position.x + (currentBounds.x - characterContainer.pivot.x) * scale,
+      y: characterContainer.position.y + (currentBounds.y - characterContainer.pivot.y) * scale,
+      width: currentBounds.width * scale,
+      height: currentBounds.height * scale,
+    };
     app.stage.hitArea = new Rectangle(0, 0, app.screen.width, app.screen.height);
     pointer.x = clamp(pointer.x, 0, app.screen.width);
     pointer.y = clamp(pointer.y, 0, app.screen.height);
@@ -755,10 +1553,6 @@ export const createScannerPlayable = async ({
       return;
     }
 
-    const shouldTriggerWin = !gameWon
-      && event?.type === 'pointerup'
-      && (scanHitArmed || hasInfectedHit());
-
     if (event?.pointerId !== undefined && event.pointerId !== activePointerId) {
       return;
     }
@@ -767,9 +1561,15 @@ export const createScannerPlayable = async ({
       updatePointerFromEvent(event);
     }
 
+    const shouldTriggerWin = !gameWon
+      && scanningTool === TOOL_XRAY
+      && event?.type === 'pointerup'
+      && hasInfectedHit();
+
     releaseMask.x = pointer.x;
     releaseMask.y = pointer.y;
     releaseMask.strength = 1;
+    releaseMask.tool = scanningTool || activeTool;
     activePointerId = null;
     scanHitArmed = false;
     setScanningState(false);
@@ -788,26 +1588,51 @@ export const createScannerPlayable = async ({
     updatePointerFromEvent(event);
   });
 
+  listen(window, 'pointerdown', () => {
+    unlockHeartbeatAudio();
+  }, { capture: true });
+  listen(window, 'keydown', () => {
+    unlockHeartbeatAudio();
+  }, { capture: true });
   listen(window, 'pointerup', stopScanning);
   listen(window, 'pointercancel', stopScanning);
   listen(window, 'blur', () => stopScanning());
-  listen(scannerButton, 'contextmenu', (event) => event.preventDefault());
-  listen(scannerButton, 'pointerdown', (event) => {
+
+  const startScanning = (toolName, button, event) => {
     event.preventDefault();
 
-    if (activePointerId !== null || gameWon) {
+    if (activePointerId !== null || gameWon || !inspectionStarted) {
       return;
     }
 
     activePointerId = event.pointerId;
+    activeTool = toolName;
     releaseMask.strength = 0;
+    releaseMask.tool = toolName;
     scanHitArmed = false;
-    scannerButton.setPointerCapture?.(event.pointerId);
-    setScanningState(true);
+    button.setPointerCapture?.(event.pointerId);
+    setScanningState(true, toolName);
+    if (toolName === TOOL_VITALS) {
+      unlockHeartbeatAudio();
+    }
     updatePointerFromEvent(event);
     drawSpotlight(scanClock);
-  });
+  };
+
+  for (const [toolName, button] of Object.entries(toolButtons)) {
+    listen(button, 'contextmenu', (event) => event.preventDefault());
+    listen(button, 'pointerdown', (event) => {
+      startScanning(toolName, button, event);
+    });
+  }
+
   listen(ctaButton, 'click', handleInstall);
+  listen(startButton, 'click', async (event) => {
+    event.preventDefault();
+
+    await ensureHeartbeatAudio();
+    setInspectionStarted(true);
+  });
   listen(endgameOverlay, 'click', (event) => {
     if (
       event.target === endgameOverlay
@@ -824,18 +1649,24 @@ export const createScannerPlayable = async ({
     clothedSpine.update(deltaSeconds);
     nakedSpine.update(deltaSeconds);
 
-    if (pointer.active) {
-      scanHitArmed = scanHitArmed || hasInfectedHit();
+    if (pointer.active && scanningTool === TOOL_XRAY) {
+      scanHitArmed = hasInfectedHit();
     } else if (releaseMask.strength > 0) {
       releaseMask.strength = Math.max(0, releaseMask.strength - deltaSeconds * RELEASE_MASK_FADE_SPEED);
     }
 
     drawSpotlight(scanClock);
+    updateHeartbeatWave(deltaSeconds);
+    updateHeartbeatAudio();
   });
 
   setFinishedState(false);
   setEndgameVisible(false);
   setScanningState(false);
+  setInspectionStarted(false);
+  updateToolState();
+  updateVitalsReadout();
+  setVitalsVisible(false);
   appElement.dataset.volume = sdk.volume <= 0 ? 'muted' : 'unmuted';
   layout();
 
@@ -876,6 +1707,7 @@ export const createScannerPlayable = async ({
     resize,
     pause: () => {
       stopScanning();
+      setHeartbeatAudioEnabled(false);
 
       if (app.ticker.started) {
         app.ticker.stop();
@@ -892,7 +1724,9 @@ export const createScannerPlayable = async ({
       finishGameplay();
     },
     volume: (level) => {
+      appVolumeLevel = level;
       appElement.dataset.volume = level <= 0 ? 'muted' : 'unmuted';
+      updateHeartbeatAudioGain();
     },
     reset: () => {
       if (winRevealTimeoutId !== null) {
@@ -901,12 +1735,17 @@ export const createScannerPlayable = async ({
       }
 
       stopScanning();
+      setHeartbeatAudioEnabled(false);
       scanAlert.classList.remove('is-visible');
       releaseMask.strength = 0;
+      releaseMask.tool = activeTool;
       scanHitArmed = false;
       appElement.dataset.volume = sdk.volume <= 0 ? 'muted' : 'unmuted';
       setFinishedState(false);
       setEndgameVisible(false);
+      setInspectionStarted(false);
+      setVitalsVisible(false);
+      updateVitalsReadout();
       scheduleLayout();
     },
     destroy: () => {
@@ -916,6 +1755,13 @@ export const createScannerPlayable = async ({
 
       destroyed = true;
       stopScanning();
+      setHeartbeatAudioEnabled(false);
+
+      if (heartbeatAudioState.context) {
+        void heartbeatAudioState.context.close();
+        heartbeatAudioState.context = null;
+        heartbeatAudioState.masterGain = null;
+      }
 
       while (cleanupTasks.length > 0) {
         cleanupTasks.pop()();
