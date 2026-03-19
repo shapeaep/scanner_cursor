@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "playable-scripts dev",
     "build": "playable-scripts build",
-    "build:preview": "playable-scripts build preview"
+    "build:preview": "playable-scripts build preview",
+    "build:pages": "playable-scripts build preview && node scripts/prepare-pages.mjs"
   },
   "dependencies": {
     "@smoud/playable-sdk": "^1.0.24",

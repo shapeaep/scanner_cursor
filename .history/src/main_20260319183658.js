@@ -13,7 +13,7 @@ import scannerAlphaMaskUrl from '../images/alpha_masks/scanner_converted_alpha_m
 const skeletonSource = typeof rawSkeletonSource === 'string'
   ? JSON.parse(rawSkeletonSource)
   : rawSkeletonSource;
-  
+вввв
 // Playable builds use explicit asset imports here instead of import.meta.glob.
 const textureEntries = [
   { assetUrl: clothTextureUrl, alphaMaskUrl: clothAlphaMaskUrl, fileName: 'cloth.jpg' },
