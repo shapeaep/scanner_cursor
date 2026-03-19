@@ -29,9 +29,6 @@ const DETECTION_WEIGHT_THRESHOLD = 0.18;
 const VITALS_HEAD_BONE_NAME = 'cloth23';
 const RELEASE_MASK_FADE_SPEED = 5.6;
 const ENDGAME_REVEAL_DELAY_MS = 900;
-const CTA_TITLE = 'SCAN COMPLETE';
-const CTA_SUBTITLE = 'Infection confirmed. Start treatment now.';
-const CTA_BUTTON_LABEL = 'INSTALL NOW';
 const TOUCH_SCAN_LIFT_FACTOR = 1.35;
 const TOUCH_SCAN_LIFT_MIN = 170;
 const PEN_SCAN_LIFT_FACTOR = 0.8;
@@ -284,6 +281,42 @@ const createScanAlert = () => {
   return scanAlert;
 };
 
+const createChecklist = () => {
+  const checklist = document.createElement('div');
+
+  checklist.className = 'checklist';
+  checklist.innerHTML = `
+    <div class="checklist__title">Check List</div>
+    <div class="checklist__item" data-task="vitals">
+      <span class="checklist__icon" aria-hidden="true"></span>
+      <div class="checklist__copy">
+        <div class="checklist__label">Vitals</div>
+        <div class="checklist__detail">Pending</div>
+      </div>
+    </div>
+    <div class="checklist__item" data-task="injury">
+      <span class="checklist__icon" aria-hidden="true"></span>
+      <div class="checklist__copy">
+        <div class="checklist__label">Injury</div>
+        <div class="checklist__detail">Pending</div>
+      </div>
+    </div>
+  `;
+
+  const vitalsItem = checklist.querySelector('[data-task="vitals"]');
+  const injuryItem = checklist.querySelector('[data-task="injury"]');
+
+  if (!(vitalsItem instanceof HTMLElement) || !(injuryItem instanceof HTMLElement)) {
+    throw new Error('Failed to create checklist.');
+  }
+
+  return {
+    checklist,
+    vitalsItem,
+    injuryItem,
+  };
+};
+
 const createVitalsReadout = () => {
   const vitalsReadout = document.createElement('div');
 
@@ -317,22 +350,41 @@ const createEndgameOverlay = () => {
   endgameOverlay.innerHTML = `
     <div class="endgame__backdrop"></div>
     <div class="endgame__panel">
-      <div class="endgame__eyebrow">Mission Complete</div>
-      <h2 class="endgame__title">${CTA_TITLE}</h2>
-      <p class="endgame__subtitle">${CTA_SUBTITLE}</p>
-      <button class="endgame__cta" type="button">${CTA_BUTTON_LABEL}</button>
+      <div class="endgame__summary">
+        <div class="endgame__fact"><span class="endgame__fact-label">Temperature</span><span class="endgame__fact-value" data-role="temperature">Not recorded</span></div>
+        <div class="endgame__fact"><span class="endgame__fact-label">Wound</span><span class="endgame__fact-value" data-role="wound">Unknown</span></div>
+        <div class="endgame__fact"><span class="endgame__fact-label">Findings</span><span class="endgame__fact-value" data-role="findings">Pending</span></div>
+      </div>
+      <div class="endgame__actions">
+        <button class="endgame__action endgame__action--pass" type="button">Pass</button>
+        <button class="endgame__action endgame__action--destroy" type="button">Destroy</button>
+      </div>
     </div>
   `;
 
-  const ctaButton = endgameOverlay.querySelector('.endgame__cta');
+  const passButton = endgameOverlay.querySelector('.endgame__action--pass');
+  const destroyButton = endgameOverlay.querySelector('.endgame__action--destroy');
+  const temperatureValue = endgameOverlay.querySelector('[data-role="temperature"]');
+  const woundValue = endgameOverlay.querySelector('[data-role="wound"]');
+  const findingsValue = endgameOverlay.querySelector('[data-role="findings"]');
 
-  if (!(ctaButton instanceof HTMLButtonElement)) {
-    throw new Error('Failed to create CTA button.');
+  if (
+    !(passButton instanceof HTMLButtonElement)
+    || !(destroyButton instanceof HTMLButtonElement)
+    || !(temperatureValue instanceof HTMLElement)
+    || !(woundValue instanceof HTMLElement)
+    || !(findingsValue instanceof HTMLElement)
+  ) {
+    throw new Error('Failed to create endgame buttons.');
   }
 
   return {
     endgameOverlay,
-    ctaButton,
+    passButton,
+    destroyButton,
+    temperatureValue,
+    woundValue,
+    findingsValue,
   };
 };
 
@@ -387,9 +439,17 @@ export const createScannerPlayable = async ({
   });
   const toolDock = createToolDock(xrayButton, vitalsButton);
   const { introOverlay, startButton } = createIntroOverlay();
+  const { checklist, vitalsItem, injuryItem } = createChecklist();
   const { vitalsReadout, tempValue, bpmValue } = createVitalsReadout();
   const scanAlert = createScanAlert();
-  const { endgameOverlay, ctaButton } = createEndgameOverlay();
+  const {
+    endgameOverlay,
+    passButton,
+    destroyButton,
+    temperatureValue,
+    woundValue,
+    findingsValue,
+  } = createEndgameOverlay();
   const cleanupTasks = [];
 
   const listen = (target, eventName, handler, options) => {
@@ -398,7 +458,7 @@ export const createScannerPlayable = async ({
   };
 
   appElement.innerHTML = '';
-  appElement.append(app.view, toolDock, vitalsReadout, scanAlert, endgameOverlay, introOverlay);
+  appElement.append(app.view, toolDock, checklist, vitalsReadout, endgameOverlay, introOverlay);
 
   const attachmentNames = collectAttachmentNames(skeletonSource);
   const textureSets = await loadTextureSets(attachmentNames);
@@ -477,6 +537,18 @@ export const createScannerPlayable = async ({
   let endgameVisible = false;
   let inspectionStarted = false;
   let appVolumeLevel = sdk.volume ?? 1;
+  const taskState = {
+    vitals: {
+      done: false,
+      detail: 'Pending',
+      temperature: null,
+    },
+    injury: {
+      done: false,
+      detail: 'Pending',
+      found: null,
+    },
+  };
   let characterScreenBounds = {
     x: 0,
     y: 0,
@@ -583,13 +655,79 @@ export const createScannerPlayable = async ({
     }
 
     toolDock.classList.toggle('is-hidden', gameWon || !inspectionStarted);
+    checklist.classList.toggle('is-hidden', gameWon || !inspectionStarted);
     appElement.dataset.tool = activeTool;
+  };
+
+  const renderChecklist = () => {
+    for (const [taskName, state] of Object.entries(taskState)) {
+      const item = taskName === 'vitals' ? vitalsItem : injuryItem;
+      const detail = item.querySelector('.checklist__detail');
+
+      item.dataset.complete = state.done ? 'true' : 'false';
+
+      if (detail) {
+        detail.textContent = state.detail;
+      }
+    }
+  };
+
+  const maybeFinishChecklist = () => {
+    if (gameWon || !taskState.vitals.done || !taskState.injury.done) {
+      return;
+    }
+
+    finishGameplay();
+  };
+
+  const renderEndgameSummary = () => {
+    const recordedTemperature = taskState.vitals.temperature;
+    const woundFound = taskState.injury.found;
+
+    temperatureValue.textContent = Number.isFinite(recordedTemperature) && recordedTemperature > 0
+      ? formatTemperature(recordedTemperature)
+      : 'Not recorded';
+    woundValue.textContent = woundFound === null
+      ? 'Unknown'
+      : woundFound
+        ? 'Found'
+        : 'Not found';
+    findingsValue.textContent = woundFound === null
+      ? 'Pending'
+      : woundFound
+        ? 'Anomaly found'
+        : 'Nothing found';
+  };
+
+  const completeVitalsTask = (temperature) => {
+    if (!Number.isFinite(temperature) || temperature <= 0 || taskState.vitals.done) {
+      return;
+    }
+
+    taskState.vitals.done = true;
+    taskState.vitals.temperature = temperature;
+    taskState.vitals.detail = `${formatTemperature(temperature)} recorded`;
+    renderChecklist();
+    maybeFinishChecklist();
+  };
+
+  const completeInjuryTask = (foundInjury) => {
+    if (taskState.injury.done) {
+      return;
+    }
+
+    taskState.injury.done = true;
+    taskState.injury.found = foundInjury;
+    taskState.injury.detail = foundInjury ? 'Anomaly found' : 'Nothing found';
+    renderChecklist();
+    maybeFinishChecklist();
   };
 
   const setInspectionStarted = (started) => {
     inspectionStarted = started;
     introOverlay.classList.toggle('is-hidden', started);
     appElement.classList.toggle('is-ready', started);
+    checklist.classList.toggle('is-hidden', !started || gameWon);
     updateToolState();
   };
 
@@ -610,6 +748,7 @@ export const createScannerPlayable = async ({
   const setFinishedState = (isFinished) => {
     gameWon = isFinished;
     toolDock.classList.toggle('is-hidden', isFinished || !inspectionStarted);
+    checklist.classList.toggle('is-hidden', isFinished || !inspectionStarted);
 
     for (const button of Object.values(toolButtons)) {
       button.disabled = isFinished;
@@ -665,6 +804,11 @@ export const createScannerPlayable = async ({
     heartbeatAudioState.unlockRequested = true;
     void ensureHeartbeatAudio().then(() => {
       heartbeatAudioState.unlockRequested = false;
+
+      if (heartbeatAudioState.enabled && heartbeatAudioState.nextBeatAt <= 0) {
+        primeHeartbeatAudio(heartbeatAudioState.bpm);
+      }
+
       updateHeartbeatAudioGain();
     });
   };
@@ -683,6 +827,12 @@ export const createScannerPlayable = async ({
     heartbeatAudioState.masterGain.gain.linearRampToValueAtTime(gainTarget, now + 0.06);
   };
 
+  const getHeartbeatIntensity = (bpm) => clamp(
+    (bpm - BASE_HEART_RATE) / Math.max(ALERT_HEART_RATE - BASE_HEART_RATE, 1),
+    0,
+    1,
+  );
+
   const setHeartbeatAudioEnabled = (enabled, bpm = BASE_HEART_RATE) => {
     const nextEnabled = enabled;
     const nextBpm = Number.isFinite(bpm) ? Math.max(0, bpm) : BASE_HEART_RATE;
@@ -696,6 +846,10 @@ export const createScannerPlayable = async ({
       heartbeatAudioState.nextBeatAt = 0;
     } else {
       unlockHeartbeatAudio();
+
+      if (enabledChanged) {
+        primeHeartbeatAudio(nextBpm);
+      }
     }
 
     if (enabledChanged || bpmChanged) {
@@ -732,6 +886,29 @@ export const createScannerPlayable = async ({
     oscillator.stop(startTime + duration + 0.02);
   };
 
+  const primeHeartbeatAudio = (bpm = BASE_HEART_RATE) => {
+    if (
+      !heartbeatAudioState.context
+      || !heartbeatAudioState.masterGain
+      || heartbeatAudioState.context.state !== 'running'
+      || appVolumeLevel <= 0
+    ) {
+      heartbeatAudioState.nextBeatAt = 0;
+      return;
+    }
+
+    const safeBpm = Math.max(24, bpm || BASE_HEART_RATE);
+    const beatInterval = 60 / safeBpm;
+    const now = heartbeatAudioState.context.currentTime;
+    const intensity = getHeartbeatIntensity(safeBpm);
+    const firstBeatAt = now + 0.01;
+    const secondBeatAt = firstBeatAt + HEARTBEAT_SOUND_DOUBLE_PULSE_DELAY;
+
+    triggerHeartbeatPulse(firstBeatAt, 82 + intensity * 10, 0.11, 1.15 + intensity * 0.22);
+    triggerHeartbeatPulse(secondBeatAt, 62 + intensity * 8, 0.085, 0.68 + intensity * 0.16);
+    heartbeatAudioState.nextBeatAt = now + Math.min(beatInterval * 0.58, 0.42);
+  };
+
   const updateHeartbeatAudio = () => {
     if (
       !heartbeatAudioState.enabled
@@ -754,7 +931,7 @@ export const createScannerPlayable = async ({
     while (heartbeatAudioState.nextBeatAt < now + 0.18) {
       const firstBeatAt = heartbeatAudioState.nextBeatAt;
       const secondBeatAt = firstBeatAt + HEARTBEAT_SOUND_DOUBLE_PULSE_DELAY;
-      const intensity = clamp((bpm - BASE_HEART_RATE) / Math.max(ALERT_HEART_RATE - BASE_HEART_RATE, 1), 0, 1);
+      const intensity = getHeartbeatIntensity(bpm);
 
       triggerHeartbeatPulse(firstBeatAt, 82 + intensity * 10, 0.11, 1.15 + intensity * 0.22);
       triggerHeartbeatPulse(secondBeatAt, 62 + intensity * 8, 0.085, 0.68 + intensity * 0.16);
@@ -911,16 +1088,8 @@ export const createScannerPlayable = async ({
   const showInfectedAlert = () => {
     if (infectionHideTimeoutId !== null) {
       window.clearTimeout(infectionHideTimeoutId);
-    }
-
-    scanAlert.classList.remove('is-visible');
-    void scanAlert.offsetWidth;
-    scanAlert.classList.add('is-visible');
-
-    infectionHideTimeoutId = window.setTimeout(() => {
-      scanAlert.classList.remove('is-visible');
       infectionHideTimeoutId = null;
-    }, 1600);
+    }
   };
 
   const finishGameplay = () => {
@@ -936,6 +1105,7 @@ export const createScannerPlayable = async ({
     setFinishedState(true);
     setScanningState(false);
     releaseMask.strength = 0;
+    renderEndgameSummary();
     setEndgameVisible(true);
 
     if (!sdk.isFinished) {
@@ -948,17 +1118,7 @@ export const createScannerPlayable = async ({
       return;
     }
 
-    showInfectedAlert();
-    setFinishedState(true);
-
-    if (winRevealTimeoutId !== null) {
-      window.clearTimeout(winRevealTimeoutId);
-    }
-
-    winRevealTimeoutId = window.setTimeout(() => {
-      winRevealTimeoutId = null;
-      finishGameplay();
-    }, ENDGAME_REVEAL_DELAY_MS);
+    finishGameplay();
   };
 
   const handleInstall = (event) => {
@@ -1561,23 +1721,34 @@ export const createScannerPlayable = async ({
       updatePointerFromEvent(event);
     }
 
-    const shouldTriggerWin = !gameWon
-      && scanningTool === TOOL_XRAY
+    const currentTool = scanningTool;
+    const hasInjuryHit = !gameWon
+      && currentTool === TOOL_XRAY
       && event?.type === 'pointerup'
       && hasInfectedHit();
+    const finalVitals = !gameWon
+      && currentTool === TOOL_VITALS
+      && event?.type === 'pointerup'
+      ? getVitalsReading(pointer.x, pointer.y, scanClock)
+      : null;
 
     releaseMask.x = pointer.x;
     releaseMask.y = pointer.y;
     releaseMask.strength = 1;
-    releaseMask.tool = scanningTool || activeTool;
+    releaseMask.tool = currentTool || activeTool;
     activePointerId = null;
     scanHitArmed = false;
     setScanningState(false);
     drawSpotlight(scanClock);
 
-    if (shouldTriggerWin) {
-      handleWin();
+    if (currentTool === TOOL_VITALS && finalVitals) {
+      completeVitalsTask(finalVitals.temperature);
     }
+
+    if (currentTool === TOOL_XRAY && event?.type === 'pointerup') {
+      completeInjuryTask(hasInjuryHit);
+    }
+
   };
 
   listen(window, 'pointermove', (event) => {
@@ -1626,20 +1797,13 @@ export const createScannerPlayable = async ({
     });
   }
 
-  listen(ctaButton, 'click', handleInstall);
+  listen(passButton, 'click', handleInstall);
+  listen(destroyButton, 'click', handleInstall);
   listen(startButton, 'click', async (event) => {
     event.preventDefault();
 
     await ensureHeartbeatAudio();
     setInspectionStarted(true);
-  });
-  listen(endgameOverlay, 'click', (event) => {
-    if (
-      event.target === endgameOverlay
-      || (event.target instanceof Element && event.target.classList.contains('endgame__backdrop'))
-    ) {
-      handleInstall(event);
-    }
   });
 
   app.ticker.add(() => {
@@ -1664,6 +1828,8 @@ export const createScannerPlayable = async ({
   setEndgameVisible(false);
   setScanningState(false);
   setInspectionStarted(false);
+  renderChecklist();
+  renderEndgameSummary();
   updateToolState();
   updateVitalsReadout();
   setVitalsVisible(false);
@@ -1744,6 +1910,14 @@ export const createScannerPlayable = async ({
       setFinishedState(false);
       setEndgameVisible(false);
       setInspectionStarted(false);
+      taskState.vitals.done = false;
+      taskState.vitals.detail = 'Pending';
+      taskState.vitals.temperature = null;
+      taskState.injury.done = false;
+      taskState.injury.detail = 'Pending';
+      taskState.injury.found = null;
+      renderChecklist();
+      renderEndgameSummary();
       setVitalsVisible(false);
       updateVitalsReadout();
       scheduleLayout();
