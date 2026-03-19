@@ -1,0 +1,254 @@
+:root {
+  color: #f3f5f7;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  --bg-position: 50% -100%;
+  --bg-size: 175% auto;
+  --bg-overlay: linear-gradient(180deg, rgba(10, 14, 22, 0.18), rgba(10, 14, 22, 0.34));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  min-height: 100%;
+  width: 100%;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: #131821;
+}
+
+#app {
+  position: relative;
+  overflow: hidden;
+  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  background-color: #131821;
+}
+
+#app::before,
+#app::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+#app::before {
+  z-index: 0;
+  background-image: url('../images/bg.png');
+  background-position: var(--bg-position);
+  background-size: var(--bg-size);
+  background-repeat: no-repeat;
+}
+
+#app::after {
+  z-index: 0;
+  background: var(--bg-overlay);
+}
+
+.scanner-button {
+  position: absolute;
+  right: 22px;
+  bottom: 20px;
+  z-index: 3;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  width: 170px;
+  padding: 12px 10px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(25, 34, 50, 0.96), rgba(12, 16, 24, 0.92)),
+    rgba(12, 16, 24, 0.82);
+  box-shadow:
+    0 18px 45px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #f3f5f7;
+  cursor: grab;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  animation: scannerDockFloat 2.8s ease-in-out infinite;
+}
+
+.scanner-button:active,
+.scanner-button.is-active {
+  cursor: grabbing;
+}
+
+.scanner-button.is-active {
+  transform: translateY(2px) scale(0.98);
+  animation: none;
+}
+
+.scanner-button__shine {
+  position: absolute;
+  inset: -30% auto auto -10%;
+  width: 64%;
+  height: 160%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 58%);
+  opacity: 0.5;
+  transform: rotate(18deg);
+  pointer-events: none;
+}
+
+.scanner-button__img {
+  position: relative;
+  width: 136px;
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 12px 26px rgba(0, 0, 0, 0.35));
+}
+
+.scanner-button__label {
+  position: relative;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(255, 185, 81, 0.2), rgba(255, 126, 80, 0.16));
+  color: #ffdca0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scanner-button__hint {
+  position: relative;
+  color: rgba(243, 245, 247, 0.72);
+  font-size: 12px;
+}
+
+.scan-alert {
+  position: absolute;
+  left: 50%;
+  top: 16%;
+  z-index: 4;
+  padding: 14px 24px;
+  border: 1px solid rgba(255, 138, 138, 0.38);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at center, rgba(255, 122, 122, 0.22), rgba(85, 10, 10, 0.86) 72%),
+    rgba(36, 6, 6, 0.9);
+  box-shadow:
+    0 18px 46px rgba(0, 0, 0, 0.36),
+    0 0 36px rgba(255, 87, 87, 0.26);
+  color: #ffe7e7;
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -18px) scale(0.84);
+  text-shadow: 0 0 18px rgba(255, 102, 102, 0.55);
+}
+
+.scan-alert.is-visible {
+  animation: scanAlertReveal 1.6s ease forwards;
+}
+
+.loading,
+.error {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+.error {
+  color: #ffb4b4;
+}
+
+canvas {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+@media (max-width: 720px) {
+  .scanner-button {
+    right: 12px;
+    bottom: 12px;
+    width: 148px;
+    padding: 10px 8px 8px;
+    border-radius: 24px;
+  }
+
+  .scanner-button__img {
+    width: 112px;
+  }
+
+  .scan-alert {
+    top: 13%;
+    padding: 12px 18px;
+    font-size: 22px;
+    letter-spacing: 0.18em;
+  }
+}
+
+@media (orientation: portrait) {
+  .scanner-button {
+    left: 50%;
+    right: auto;
+    margin-left: -85px;
+  }
+}
+
+@media (max-width: 720px) and (orientation: portrait) {
+  .scanner-button {
+    margin-left: -74px;
+  }
+}
+
+@keyframes scannerDockFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes scanAlertReveal {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -18px) scale(0.84);
+  }
+
+  14% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1.04);
+  }
+
+  22% {
+    transform: translate(-50%, 0) scale(0.99);
+  }
+
+  72% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -8px) scale(0.96);
+  }
+}

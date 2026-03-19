@@ -1,0 +1,19 @@
+{
+  "name": "scanner-cursor",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "playable-scripts dev",
+    "build": "playable-scripts build",
+    "build:preview": "playable-scripts build preview"
+  },
+  "dependencies": {
+    "@smoud/playable-sdk": "^1.0.24",
+    "pixi-spine": "4.0.6",
+    "pixi.js": "7.4.3"
+  },
+  "devDependencies": {
+    "@smoud/playable-scripts": "^1.2.3"
+  }
+}

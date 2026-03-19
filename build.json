@@ -1,0 +1,18 @@
+{
+  "app": "scanner_cursor",
+  "name": "spine_scanner",
+  "version": "v1",
+  "language": "en",
+  "orientation": "both",
+  "filename": "{app}_{name}_{version}_{orientation}_{network}",
+  "googlePlayUrl": "https://play.google.com/store/apps/details?id=com.example.app",
+  "appStoreUrl": "https://apps.apple.com/app/id000000000",
+  "compilation": {
+    "dropConsole": true
+  },
+  "defines": {
+    "ASSET_COLOR_FORMAT": "'jpg'",
+    "ASSET_ALPHA_MASK_FORMAT": "'jpg'",
+    "ASSET_BACKGROUND_FORMAT": "'jpg'"
+  }
+}
