@@ -2,12 +2,15 @@ import { copyFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 const distDir = path.resolve('dist');
+const targetHint = process.argv[2]?.toLowerCase() || '';
 
 const htmlFiles = (await readdir(distDir))
   .filter((fileName) => fileName.toLowerCase().endsWith('.html'))
   .sort((left, right) => {
-    const leftPriority = left.includes('_preview') ? 0 : 1;
-    const rightPriority = right.includes('_preview') ? 0 : 1;
+    const leftLower = left.toLowerCase();
+    const rightLower = right.toLowerCase();
+    const leftPriority = targetHint && leftLower.includes(targetHint) ? 0 : 1;
+    const rightPriority = targetHint && rightLower.includes(targetHint) ? 0 : 1;
 
     if (leftPriority !== rightPriority) {
       return leftPriority - rightPriority;

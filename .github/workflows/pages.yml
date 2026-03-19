@@ -38,7 +38,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build preview playable
+      - name: Build AppLovin playable
         run: npm run build:pages
 
       - name: Upload Pages artifact
