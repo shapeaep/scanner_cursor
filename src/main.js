@@ -29,6 +29,10 @@ const ENDGAME_REVEAL_DELAY_MS = 900;
 const CTA_TITLE = 'SCAN COMPLETE';
 const CTA_SUBTITLE = 'Infection confirmed. Start treatment now.';
 const CTA_BUTTON_LABEL = 'INSTALL NOW';
+const TOUCH_SCAN_LIFT_FACTOR = 1.35;
+const TOUCH_SCAN_LIFT_MIN = 88;
+const PEN_SCAN_LIFT_FACTOR = 0.8;
+const PEN_SCAN_LIFT_MIN = 42;
 
 const collectAttachmentNames = (skeletonData) => {
   const attachmentNames = new Set();
@@ -323,6 +327,7 @@ export const createScannerPlayable = async ({
     x: initialWidth / 2,
     y: initialHeight / 2,
     active: false,
+    pointerType: 'mouse',
   };
   const releaseMask = {
     x: pointer.x,
@@ -429,15 +434,30 @@ export const createScannerPlayable = async ({
     appElement.classList.toggle('has-endgame', isVisible);
   };
 
+  const getScanLiftOffset = (pointerType) => {
+    if (pointerType === 'touch') {
+      return Math.max(TOUCH_SCAN_LIFT_MIN, revealRadius * TOUCH_SCAN_LIFT_FACTOR);
+    }
+
+    if (pointerType === 'pen') {
+      return Math.max(PEN_SCAN_LIFT_MIN, revealRadius * PEN_SCAN_LIFT_FACTOR);
+    }
+
+    return 0;
+  };
+
   const updatePointerFromEvent = (event) => {
     if (activePointerId !== null && event.pointerId !== activePointerId) {
       return;
     }
 
     const nextPoint = getRendererPointFromClient(app, event.clientX, event.clientY);
+    const pointerType = event.pointerType || pointer.pointerType || 'mouse';
+    const liftOffset = getScanLiftOffset(pointerType);
 
+    pointer.pointerType = pointerType;
     pointer.x = nextPoint.x;
-    pointer.y = nextPoint.y;
+    pointer.y = clamp(nextPoint.y - liftOffset, 0, app.screen.height);
   };
 
   const showInfectedAlert = () => {
