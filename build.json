@@ -5,8 +5,8 @@
   "language": "en",
   "orientation": "both",
   "filename": "{app}_{name}_{version}_{orientation}_{network}",
-  "googlePlayUrl": "https://play.google.com/store/apps/details?id=com.example.app",
-  "appStoreUrl": "https://apps.apple.com/app/id000000000",
+  "googlePlayUrl": "https://play.google.com/store/apps/details?id=com.glu.zbs",
+  "appStoreUrl": "https://apps.apple.com/us/app/left-to-survive-zombie-games/id1090501422",
   "compilation": {
     "dropConsole": true
   },
